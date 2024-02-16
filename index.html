@@ -1,0 +1,63 @@
+<html>
+  <body>
+    <div id="root">
+      <input id="search" />
+      <div id="logs"></div>
+    </div>
+  </body>
+
+  <script type="text/javascript">
+    (() => {
+        const logs = document.getElementById("logs")
+        const conn = new WebSocket({{.SocketConn}})
+        const search = document.getElementById("search")
+
+        conn.onopen = () => {
+            console.log("Connection opened!")
+        }
+
+        conn.onclose = () => {
+            console.log("Connection closed!")
+        }
+
+        conn.onmessage = (evt) => {
+            // remove children on update
+            while (logs.firstChild) {
+                logs.removeChild(logs.lastChild)
+            }
+
+            console.log(evt.data.split("\n"))
+            evt.data
+                .split("\n")
+                .map(line => {
+                    const p = document.createElement("p")
+                    p.textContent = line
+                    return p
+                })
+                .forEach(p => logs.appendChild(p))
+        }
+
+        document.addEventListener("keydown", (e) => {
+            console.log(e)
+            switch (e.key) {
+                case "j":
+                case "k":
+                case "J":
+                case "K":
+                    conn.send(e.key)
+                    break
+                case "/":
+                    console.log("search focused")
+                    search.focus()
+                    break
+                case "Enter":
+                    conn.send(search.value.replace("/", ""))
+                    break
+                default:
+                    return
+            }
+        })
+
+    })()
+  </script>
+</html>
