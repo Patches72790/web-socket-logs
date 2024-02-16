@@ -26,7 +26,6 @@
                 logs.removeChild(logs.lastChild)
             }
 
-            console.log(evt.data.split("\n"))
             evt.data
                 .split("\n")
                 .map(line => {
@@ -37,21 +36,30 @@
                 .forEach(p => logs.appendChild(p))
         }
 
+
+        search.addEventListener("focus", (e) => conn.send(JSON.stringify({ type: "SEARCH_CTL", message: "ON"})))
+        search.addEventListener("focusout", (e) => conn.send(JSON.stringify({ type: "SEARCH_CTL", message: "OFF"})))
+
         document.addEventListener("keydown", (e) => {
-            console.log(e)
             switch (e.key) {
                 case "j":
                 case "k":
                 case "J":
                 case "K":
-                    conn.send(e.key)
+                    conn.send(JSON.stringify({
+                        type: "KEY",
+                        message: e.key
+                    }))
                     break
                 case "/":
-                    console.log("search focused")
                     search.focus()
+                    setTimeout(() => search.input = '', 10)
                     break
                 case "Enter":
-                    conn.send(search.value.replace("/", ""))
+                    conn.send(JSON.stringify({
+                        type: "SEARCH_VAL",
+                        message: search.value.replace("/", "")
+                    }))
                     break
                 default:
                     return
