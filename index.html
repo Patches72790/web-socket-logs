@@ -37,8 +37,8 @@
         }
 
 
-        search.addEventListener("focus", (e) => conn.send(JSON.stringify({ type: "SEARCH_CTL", message: "ON"})))
-        search.addEventListener("focusout", (e) => conn.send(JSON.stringify({ type: "SEARCH_CTL", message: "OFF"})))
+        search.addEventListener("focus", (e) => conn.send(JSON.stringify({ type: "MODE_CTL", message: "SEARCH"})))
+        search.addEventListener("focusout", (e) => conn.send(JSON.stringify({ type: "MODE_CTL", message: "SCROLL"})))
 
         document.addEventListener("keydown", (e) => {
             switch (e.key) {

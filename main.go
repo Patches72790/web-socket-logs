@@ -7,10 +7,8 @@ import (
 	"html/template"
 	"io"
 	"log"
-	"math"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 	"web-sockets/util"
 
@@ -41,21 +39,20 @@ func (i *WebSocketID) NewID() uint {
 // for different types of handling scenarios
 // such as search, read, file_search, et cetera
 type WebSocketSession struct {
-	id           uint
-	conn         *websocket.Conn
-	filename     string
-	read_size    uint64
-	search_mode  bool
-	search_chan  chan string
-	log_seek_pos struct {
-		sync.Mutex
-		offset int64
-	}
+	id               uint
+	conn             *websocket.Conn
+	filename         string
+	read_size        uint64
+	search_mode      bool
+	mode_chan        chan string
+	search_chan      chan string
+	file_offset_chan chan int64
 }
 
 func (s *WebSocketSession) Close() {
 	s.conn.Close()
 	close(s.search_chan)
+	close(s.file_offset_chan)
 }
 
 func (s *WebSocketSession) ReadCommand() (*ClientCommand, error) {
@@ -81,11 +78,13 @@ func (s *WebSocketSession) ReadCommand() (*ClientCommand, error) {
 
 func NewWebSocketSession(conn *websocket.Conn, filename string) *WebSocketSession {
 	return &WebSocketSession{
-		id:          WS_ID.NewID(),
-		conn:        conn,
-		filename:    filename,
-		read_size:   8192,
-		search_chan: make(chan string),
+		id:               WS_ID.NewID(),
+		conn:             conn,
+		filename:         filename,
+		read_size:        8192,
+		mode_chan:        make(chan string),
+		search_chan:      make(chan string),
+		file_offset_chan: make(chan int64),
 	}
 }
 
@@ -113,71 +112,22 @@ func ws_reader(session *WebSocketSession) {
 		case "KEY":
 			switch command.Message {
 			case "J":
-				// go to bottom
-				session.log_seek_pos.Lock()
-				file, err := os.Stat(session.filename)
-				if err != nil {
-					log.Println("Error getting file info", err)
-					session.log_seek_pos.Unlock()
-					break
-				}
-
-				session.log_seek_pos.offset = file.Size() - int64(session.read_size)
-				log.Printf("Set offset to %d\n", session.log_seek_pos.offset)
-				session.log_seek_pos.Unlock()
-				continue
+				log.Println("TODO GOTO BOTTOM")
 			case "K":
-				// go to top
-				session.log_seek_pos.Lock()
-				session.log_seek_pos.offset = 0
-				log.Printf("Set offset to %d\n", session.log_seek_pos.offset)
-				session.log_seek_pos.Unlock()
-				continue
+				log.Println("TODO GOTO TOP")
 			case "j":
-				session.log_seek_pos.Lock()
-				file, err := os.Stat(session.filename)
-				if err != nil {
-					log.Println("Error getting file info", err)
-					session.log_seek_pos.Unlock()
-					break
-				}
-
-				if math.Abs(float64(file.Size()-session.log_seek_pos.offset)) < float64(session.read_size) {
-					log.Printf("EOF reached - skipping offset increment")
-					session.log_seek_pos.Unlock()
-					continue
-				}
-
-				session.log_seek_pos.offset += int64(session.read_size)
-				log.Printf("Set offset to %d\n", session.log_seek_pos.offset)
-				session.log_seek_pos.Unlock()
-				continue
+				session.file_offset_chan <- int64(session.read_size)
 			case "k":
-				session.log_seek_pos.Lock()
-				if session.log_seek_pos.offset == 0 {
-					log.Println("Offset at 0, continuing")
-					session.log_seek_pos.Unlock()
-					continue
-				}
-				session.log_seek_pos.offset -= int64(session.read_size)
-				// don't underflow offset
-				if session.log_seek_pos.offset < 0 {
-					session.log_seek_pos.offset = 0
-				}
-				log.Printf("Set offset to %d\n", session.log_seek_pos.offset)
-				session.log_seek_pos.Unlock()
-				continue
+				session.file_offset_chan <- -int64(session.read_size)
 			}
-		case "SEARCH_CTL":
-			// TODO => Refactor to use timestamps perhaps to avoid stale searches
+		case "MODE_CTL":
 			switch command.Message {
-			case "ON":
+			case "SEARCH":
 				log.Println("Setting search mode")
-				session.search_mode = true
-			case "OFF":
-				log.Println("Clearing search mode")
-				session.search_mode = false
-				session.search_chan <- ""
+				session.mode_chan <- "SEARCH"
+			case "SCROLL":
+				log.Println("Setting scroll mode")
+				session.mode_chan <- "SCROLL"
 			}
 		case "SEARCH_VAL":
 			log.Printf("Processing search value: %s", command.Message)
@@ -205,90 +155,111 @@ func ws_writer(session *WebSocketSession) {
 		return
 	}
 
-	var last_read_offset int64 = -1
+	current_mode := "SCROLL"
 	for {
-		// if search mode is on, wait for search input
-		switch session.search_mode {
-		case true:
-			select {
-			// read changes in search channel
-			case search_str, ok := <-session.search_chan:
+		select {
+		case mode_chan, ok := <-session.mode_chan:
+			if !ok {
+				log.Println("Error reading mode channel")
+				return
+			}
+			log.Printf("Setting mode to %s", mode_chan)
+			current_mode = mode_chan
 
-				if !ok {
-					log.Println("Error reading search channel")
-					return
-				}
+		// read changes in search channel
+		case search_str, ok := <-session.search_chan:
+			if current_mode != "SEARCH" {
+				continue
+			}
 
-				log.Println("Read change in search channel", search_str)
-				str_matches, err := util.SearchFile(search_str, session.filename)
-				if err != nil {
-					log.Printf("Error reading file: %s", err)
-					return
-				}
+			if !ok {
+				log.Println("Error reading search channel")
+				return
+			}
 
-				err = session.conn.SetWriteDeadline(time.Now().Add(write_wait))
+			log.Println("Read change in search channel", search_str)
+			str_matches, err := util.SearchFile(search_str, session.filename)
+			if err != nil {
+				log.Printf("Error reading file: %s", err)
+				return
+			}
+
+			err = session.conn.SetWriteDeadline(time.Now().Add(write_wait))
+			if err != nil {
+				log.Printf("Error setting write limit %s", err)
+				return
+			}
+
+			err = session.conn.WriteMessage(websocket.TextMessage, []byte(str_matches))
+			if err != nil {
+				log.Printf("Error writing search message: %s", err)
+				return
+			}
+
+		// otherwise, select on the period of the ticker
+		case file_offset, ok := <-session.file_offset_chan:
+			if current_mode != "SCROLL" {
+				continue
+			}
+
+			if !ok {
+				log.Println("Error reading file offset channel")
+				return
+			}
+
+			file_info, err := file.Stat()
+			if err != nil {
+				log.Printf("Error calling fstat %s", err)
+				return
+			}
+			current_offset, err := file.Seek(0, io.SeekCurrent)
+			if err != nil {
+				log.Printf("Error calling fseek %s", err)
+				return
+			}
+
+			// case 1) change offset < 0 and current offset is at BOF (dont read before beginning of file)
+			if file_offset < 0 && current_offset == 0 {
+				log.Println("Not seeking file since at beginning of file")
+				continue
+			}
+
+			// case 2) change offset > 0 and current offset is at EOF (dont read after EOF)
+			if current_offset+file_offset > file_info.Size() {
+				log.Printf("Not reading file since at EOF offset %d\n", current_offset)
+				continue
+			}
+
+			// case 3) -inf < change offset < inf and current offset is at MOF (otherwise, read either direction)
+			offset, err := file.Seek(file_offset, io.SeekCurrent)
+			if err != nil {
+				log.Printf("Error calling fseek %s", err)
+				return
+			}
+
+			// read read_size of bytes from offset
+			buf := make([]byte, session.read_size)
+			n, err := file.ReadAt(buf, offset)
+
+			// error is not EOF or otherwise
+			if err != nil && !errors.Is(err, io.EOF) {
+				log.Printf("Error reading file (NOT EOF) %s", err)
+				return
+			}
+
+			log.Printf("Read %d bytes at offset %d", n, offset)
+
+			if buf != nil {
+				err := session.conn.SetWriteDeadline(time.Now().Add(write_wait))
 				if err != nil {
 					log.Printf("Error setting write limit %s", err)
 					return
 				}
 
-				err = session.conn.WriteMessage(websocket.TextMessage, []byte(str_matches))
+				err = session.conn.WriteMessage(websocket.TextMessage, buf)
 				if err != nil {
-					log.Printf("Error writing search message: %s", err)
+					log.Printf("Error writing message: %s", err)
 					return
-				}
-			}
-
-		default:
-			// otherwise, select on the period of the ticker
-			select {
-			case <-file_ticker.C:
-				buf := make([]byte, session.read_size)
-				session.log_seek_pos.Lock()
-
-				// check for no change in offset, no need to double read
-				if last_read_offset == session.log_seek_pos.offset {
-					session.log_seek_pos.Unlock()
-					continue
-				}
-
-				// seek to current offset from start of file
-				offset, err := file.Seek(session.log_seek_pos.offset, io.SeekStart)
-				// read read_size of bytes from offset
-				n, err := file.ReadAt(buf, offset)
-				// keep track of last offset
-				last_read_offset = offset
-
-				// error is not EOF or otherwise
-				if err != nil && !errors.Is(err, io.EOF) {
-					log.Printf("Error reading file: %s", err)
-					session.log_seek_pos.Unlock()
-					break
-				}
-
-				// Reached EOF
-				if n == 0 {
-					log.Println("Read 0 bytes, continuing")
-					session.log_seek_pos.Unlock()
-					continue
-				}
-
-				session.log_seek_pos.Unlock()
-
-				log.Printf("Read %d bytes", n)
-
-				if buf != nil {
-					err := session.conn.SetWriteDeadline(time.Now().Add(write_wait))
-					if err != nil {
-						log.Printf("Error setting write limit %s", err)
-						return
-					}
-
-					err = session.conn.WriteMessage(websocket.TextMessage, buf)
-					if err != nil {
-						log.Printf("Error writing message: %s", err)
-						return
-					}
 				}
 			}
 		}
