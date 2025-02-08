@@ -2,6 +2,7 @@
   <body>
     <div id="root">
       <input id="search" />
+      <button id="files">files</button>
       <div id="logs"></div>
     </div>
   </body>
@@ -11,6 +12,7 @@
         const logs = document.getElementById("logs")
         const conn = new WebSocket({{.SocketConn}})
         const search = document.getElementById("search")
+        const files = document.getElementById("files")
 
         conn.onopen = () => {
             console.log("Connection opened!")
@@ -37,6 +39,10 @@
         }
 
 
+        files.addEventListener("click", (e) => {
+            conn.send(JSON.stringify({ type: "MODE_CTL", message: "READ_DIR"}))
+            conn.send(JSON.stringify({ type: "READ_DIR", message: "logs/tomcat/mumaa"}))
+        })
         search.addEventListener("focus", (e) => conn.send(JSON.stringify({ type: "MODE_CTL", message: "SEARCH"})))
         search.addEventListener("focusout", (e) => conn.send(JSON.stringify({ type: "MODE_CTL", message: "SCROLL"})))
 

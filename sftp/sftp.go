@@ -18,14 +18,7 @@ type ServerConfig struct {
 }
 
 func makeSSHClientConfig(username string) (*ssh.ClientConfig, error) {
-	// lookup gitlab variable
-	/*
-		ssh_password, found := os.LookupEnv("SSH_PASS")
-
-		if !found {
-			return nil, fmt.Errorf("Cannot find password for ssh")
-		}
-	*/
+	// TODO => Lookup the password based on host from env variables or config somehow
 
 	return &ssh.ClientConfig{
 		User: username,

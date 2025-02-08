@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"time"
 	"web-sockets/sftp"
@@ -39,6 +40,7 @@ type WebSocketSession struct {
 	search_mode      bool
 	mode_chan        chan string
 	search_chan      chan string
+	read_dir_chan    chan string
 	file_offset_chan chan int64
 }
 
@@ -46,6 +48,7 @@ func (s *WebSocketSession) Close() {
 	s.conn.Close()
 	close(s.search_chan)
 	close(s.file_offset_chan)
+	close(s.read_dir_chan)
 }
 
 func (s *WebSocketSession) ReadCommand() (*ClientCommand, error) {
@@ -77,6 +80,7 @@ func NewWebSocketSession(conn *websocket.Conn, filename string, session *sftp.Sf
 		read_size:        8192,
 		mode_chan:        make(chan string),
 		search_chan:      make(chan string),
+		read_dir_chan:    make(chan string),
 		file_offset_chan: make(chan int64),
 		sftp:             session,
 	}
@@ -122,11 +126,17 @@ func WsReader(session *WebSocketSession) {
 			case "SCROLL":
 				log.Println("Setting scroll mode")
 				session.mode_chan <- "SCROLL"
+			case "READ_DIR":
+				log.Println("Setting read directory mode")
+				session.mode_chan <- "READ_DIR"
 			}
+
+		case "READ_DIR":
+			log.Printf("Processing read dir change: %s", command.Message)
+			session.read_dir_chan <- command.Message
 		case "SEARCH_VAL":
 			log.Printf("Processing search value: %s", command.Message)
 			session.search_chan <- command.Message
-			break
 		case "CLOSE":
 			log.Println("Received close command from socket. Exiting")
 			return
@@ -154,6 +164,27 @@ func WsWriter(session *WebSocketSession) {
 			}
 			log.Printf("Setting mode to %s", mode_chan)
 			current_mode = mode_chan
+
+		case read_dir, ok := <-session.read_dir_chan:
+			if current_mode != "READ_DIR" {
+				continue
+			}
+			if !ok {
+				log.Println("Error reading search channel")
+				return
+			}
+
+			files, err := session.sftp.ReadDir(read_dir)
+			if err != nil {
+				log.Printf("Error reading directory: %s", err)
+				return
+			}
+
+			filenames := util.Map(files, func(f fs.FileInfo) string {
+				return f.Name()
+			})
+
+			fmt.Println(filenames)
 
 		// read changes in search channel
 		case search_str, ok := <-session.search_chan:
@@ -213,8 +244,11 @@ func WsWriter(session *WebSocketSession) {
 				continue
 			}
 
+			log.Printf("offset+read=(%d) size=(%d)\n", current_offset+file_offset, file_info.Size())
 			// case 2) change offset > 0 and current offset is at EOF (dont read after EOF)
-			if current_offset+file_offset > file_info.Size() {
+			// TODO => Fix case where file size is less than read size
+			if current_offset+file_offset > file_info.Size() &&
+				file_info.Size() > int64(session.read_size) {
 				log.Printf("Not reading file since at EOF offset %d\n", current_offset)
 				continue
 			}

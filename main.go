@@ -28,7 +28,7 @@ func log_handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Fatalf("Error getting new sftp session %s", err)
 	}
-	session := ws.NewWebSocketSession(conn, "logs/tomcat/mumaa/new-sam-service.log..2024-02-19-11", sftpSession)
+	session := ws.NewWebSocketSession(conn, "logs/tomcat/mumaa/new-sam-service.log", sftpSession)
 
 	defer func() {
 		session.Close()
