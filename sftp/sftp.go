@@ -2,6 +2,8 @@ package sftp
 
 import (
 	"fmt"
+	"os"
+
 	//"os"
 
 	"github.com/pkg/sftp"
@@ -19,11 +21,16 @@ type ServerConfig struct {
 
 func makeSSHClientConfig(username string) (*ssh.ClientConfig, error) {
 	// TODO => Lookup the password based on host from env variables or config somehow
+	ssh_password := os.Getenv("SSH_PASSWORD")
+
+	if ssh_password == "" {
+		return nil, fmt.Errorf("Error finding SSH Password for SFTP session")
+	}
 
 	return &ssh.ClientConfig{
 		User: username,
 		Auth: []ssh.AuthMethod{
-			ssh.Password("Cnfp912$f5F"),
+			ssh.Password(ssh_password),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}, nil
